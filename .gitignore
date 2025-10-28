@@ -1,0 +1,23 @@
+# Python venvs
+.venv/
+venv/
+env/
+
+# Bytecode and cache
+__pycache__/
+*.py[cod]
+
+# Data or cache directories
+*.log
+*.sqlite
+*.db
+.DS_Store
+
+# IDE files
+.vscode/
+.idea/
+
+# OS files
+Thumbs.db
+# Chroma persistence data
+chroma_tires/
