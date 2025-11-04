@@ -12,3 +12,13 @@ need to run this file to create vector DB
 # tire chatbot
 
 This is a basic chatbot that can reference the vector db
+
+
+# test gui
+
+A file to test differnt models and configurations
+
+
+# tire chatbot gui
+
+a simple gui for users
