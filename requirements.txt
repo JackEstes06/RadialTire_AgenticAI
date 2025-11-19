@@ -1,12 +1,23 @@
+# The Orchestrator
 langchain
+langgraph
+
+# The Core & Community
 langchain-core
 langchain-community
-langchain-text-splitters
+langchain-text-splitters  
+
+# The Integration Packages 
 langchain-chroma
 langchain-huggingface
 langchain-ollama
-sentence-transformers
+
+# Dependencies
 chromadb
-pandas
 pypdf
-openpyxl
+gradio
+sentence-transformers
+
+
+langchain-anthropic
+python-dotenv
