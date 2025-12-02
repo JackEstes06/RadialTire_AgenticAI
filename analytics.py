@@ -103,3 +103,25 @@ def send_hr_email(report_content, recipient_email):
         return "✅ Email sent successfully to HR!"
     except Exception as e:
         return f"❌ Failed to send email: {str(e)}"
+    
+
+
+# Add this to the bottom of your file
+if __name__ == "__main__":
+    print("Analyze logs...")
+    
+    # 1. Generate the report
+    hr_report = get_monthly_analysis(days_back=30)
+    
+    # Check if analysis returned an error string (starts with warning/error icon)
+    if hr_report.startswith("❌") or hr_report.startswith("⚠️"):
+        print(hr_report)
+    else:
+        print("Report generated! Sending email...")
+        
+        # 2. Send the email
+        # Replace this string with the actual email you want to send TO
+        recipient = "nathanjshaw88@gmail.com" 
+        
+        result = send_hr_email(hr_report, recipient)
+        print(result)
