@@ -3,25 +3,47 @@ import os
 import smtplib
 import pandas as pd
 from datetime import datetime, timedelta
+from typing import TypedDict, List
+from dotenv import load_dotenv
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+
+# LangChain / LangGraph Imports
 from langchain_anthropic import ChatAnthropic
 from langchain_core.prompts import ChatPromptTemplate
-from dotenv import load_dotenv
+from langgraph.graph import StateGraph, START, END
 
 load_dotenv()
 
 LOG_FILE = "query_logs.jsonl"
 
-def get_monthly_analysis(days_back=30):
-    """
-    Reads logs, filters for the last X days, and uses Claude 
-    to generate an HR Training Report.
-    """
-    if not os.path.exists(LOG_FILE):
-        return "❌ No log file found."
+# --- 1. Define the State (Shared Memory) ---
+class AgentState(TypedDict):
+    days_back: int          # Input: How far back to look?
+    raw_questions: str      # Internal: The raw text from logs
+    
+    # Parallel Outputs
+    stats_analysis: str     # Output from Node A
+    confusion_analysis: str # Output from Node B
+    recommendations: str    # Output from Node C
+    
+    final_report: str       # Combined output
+    email_status: str       # Result of sending
 
-    # 1. Load Logs into Pandas
+# --- 2. Setup the LLM ---
+llm = ChatAnthropic(model="claude-3-haiku-20240307", temperature=0)
+
+# --- 3. Define the Nodes (The Workers) ---
+
+def load_data_node(state: AgentState):
+    """
+    Step 1: Read the logs and load them into State.
+    """
+    days = state.get("days_back", 30)
+    
+    if not os.path.exists(LOG_FILE):
+        return {"raw_questions": "No log file found."}
+
     data = []
     with open(LOG_FILE, 'r') as f:
         for line in f:
@@ -31,75 +53,142 @@ def get_monthly_analysis(days_back=30):
                 continue
     
     if not data:
-        return "⚠️ Log file is empty."
+        return {"raw_questions": "Log file is empty."}
 
     df = pd.DataFrame(data)
+    # Mocking timestamp conversion for stability
+    if 'timestamp' in df.columns:
+        df['date'] = pd.to_datetime(df['timestamp'], unit='s')
+        cutoff = datetime.now() - timedelta(days=days)
+        df = df[df['date'] > cutoff]
     
-    # Convert timestamp to datetime
-    df['date'] = pd.to_datetime(df['timestamp'], unit='s')
+    questions = df['question'].tolist() if 'question' in df.columns else []
     
-    # Filter for last 30 days
-    cutoff_date = datetime.now() - timedelta(days=days_back)
-    recent_logs = df[df['date'] > cutoff_date]
-    
-    if recent_logs.empty:
-        return "⚠️ No queries found in the selected time range."
+    if not questions:
+        return {"raw_questions": "No questions found in range."}
 
-    # 2. Extract Questions for Analysis
-    # We don't need the answers, just what employees are confused about.
-    questions_list = recent_logs['question'].tolist()
-    questions_text = "\n".join([f"- {q}" for q in questions_list])
+    # Format list as string
+    text_data = "\n".join([f"- {q}" for q in questions])
+    return {"raw_questions": text_data}
 
-    # 3. Generate Report with Claude
-    llm = ChatAnthropic(model="claude-3-haiku-20240307", temperature=0)
-    
-    analysis_prompt = ChatPromptTemplate.from_template("""
-    You are an expert HR Training Consultant. 
-    Below is a list of questions that our employees asked the AI Knowledge Base in the last month.
-    
-    Your goal is to identify "Knowledge Gaps" to help the HR team improve training.
-    
-    List of Employee Questions:
-    {questions}
-    
-    Please provide a structured Training Report containing:
-    1. **Top 3 Recurring Topics**: What are employees asking about most?
-    2. **Confusion Points**: Are there specific nuances (e.g., specific tire models, specific warranty exclusions) that seem to trip people up?
-    3. **Training Recommendations**: Suggest 2-3 specific topics HR should cover in the next workshop.
-    
-    Format the output as a professional email body.
-    """)
-    
-    chain = analysis_prompt | llm
-    report = chain.invoke({"questions": questions_text})
-    
-    return report.content
-
-def send_hr_email(report_content, recipient_email):
+def topic_analyzer_node(state: AgentState):
     """
-    Sends the generated report via SMTP (Gmail, Outlook, etc.)
+    Parallel Worker A: Identifies top 3 recurring topics.
     """
-    sender_email = os.getenv("EMAIL_SENDER")     # Add to .env
-    sender_password = os.getenv("EMAIL_PASSWORD") # Add to .env (App Password)
+    prompt = ChatPromptTemplate.from_template(
+        "Analyze these employee questions and list only the Top 3 Recurring Topics with brief counts/context:\n\n{data}"
+    )
+    chain = prompt | llm
+    response = chain.invoke({"data": state["raw_questions"]})
+    return {"stats_analysis": response.content}
+
+def confusion_analyzer_node(state: AgentState):
+    """
+    Parallel Worker B: Identifies specific points of confusion.
+    """
+    prompt = ChatPromptTemplate.from_template(
+        "Analyze these questions for 'Confusion Points'. What specific nuances, models, or rules are tripping people up?\n\n{data}"
+    )
+    chain = prompt | llm
+    response = chain.invoke({"data": state["raw_questions"]})
+    return {"confusion_analysis": response.content}
+
+def recommendation_node(state: AgentState):
+    """
+    Parallel Worker C: Suggests training actions.
+    """
+    prompt = ChatPromptTemplate.from_template(
+        "Based on these questions, suggest 3 concrete training topics.\n\n{data}"
+    )
+    chain = prompt | llm
+    response = chain.invoke({"data": state["raw_questions"]})
+    return {"recommendations": response.content}
+
+def email_compiler_node(state: AgentState):
+    """
+    Aggregator: Combines all analyses into a report and sends it.
+    """
+    # 1. Compile the text
+    report_body = f"""
+    HR TRAINING INTELLIGENCE REPORT
+    -------------------------------
     
-    if not sender_email or not sender_password:
-        return "⚠️ Email credentials not set in .env. Report generated but not sent."
+    1. TOP RECURRING TOPICS
+    {state['stats_analysis']}
+    
+    2. AREAS OF CONFUSION
+    {state['confusion_analysis']}
+    
+    3. TRAINING RECOMMENDATIONS
+    {state['recommendations']}
+    
+    -------------------------------
+    Generated by AI Agent
+    """
+    
+    # 2. Send the Email
+    sender = os.getenv("EMAIL_SENDER")
+    password = os.getenv("EMAIL_PASSWORD")
+    recipient = os.getenv("EMAIL_RECIPIENT") # Default or from env
 
-    msg = MIMEMultipart()
-    msg['From'] = sender_email
-    msg['To'] = recipient_email
-    msg['Subject'] = f"Monthly Employee Training Insights - {datetime.now().strftime('%B %Y')}"
+    status = "Email Config Missing"
+    if sender and password:
+        try:
+            msg = MIMEMultipart()
+            msg['From'] = sender
+            msg['To'] = recipient
+            msg['Subject'] = f"Monthly Training Insights - {datetime.now().strftime('%b %Y')}"
+            msg.attach(MIMEText(report_body, 'plain'))
+            
+            with smtplib.SMTP('smtp.gmail.com', 587) as server:
+                server.starttls()
+                server.login(sender, password)
+                server.send_message(msg)
+            status = "Sent Successfully"
+        except Exception as e:
+            status = f"Failed: {str(e)}"
+            
+    return {"final_report": report_body, "email_status": status}
 
-    msg.attach(MIMEText(report_content, 'plain'))
+# --- 4. Build the Graph ---
 
-    try:
-        # Example using Gmail (smtp.gmail.com, port 587)
-        # Update server if using Outlook/Office365
-        server = smtplib.SMTP('smtp.gmail.com', 587)
-        server.starttls()
-        server.login(sender_email, sender_password)
-        server.send_message(msg)
-        server.quit()
-        return "✅ Email sent successfully to HR!"
-    except Exception as e:
-        return f"❌ Failed to send email: {str(e)}"
+builder = StateGraph(AgentState)
+
+# Add Nodes
+builder.add_node("load_data", load_data_node)
+builder.add_node("analyze_topics", topic_analyzer_node)
+builder.add_node("analyze_confusion", confusion_analyzer_node)
+builder.add_node("analyze_recommendations", recommendation_node)
+builder.add_node("compile_and_send", email_compiler_node)
+
+# Define Edges
+# 1. Start -> Load Data
+builder.add_edge(START, "load_data")
+
+# 2. Load Data -> Fan out to 3 Parallel Analyzers
+builder.add_edge("load_data", "analyze_topics")
+builder.add_edge("load_data", "analyze_confusion")
+builder.add_edge("load_data", "analyze_recommendations")
+
+# 3. Parallel Analyzers -> Fan in to Aggregator
+builder.add_edge("analyze_topics", "compile_and_send")
+builder.add_edge("analyze_confusion", "compile_and_send")
+builder.add_edge("analyze_recommendations", "compile_and_send")
+
+# 4. End
+builder.add_edge("compile_and_send", END)
+
+# Compile
+app = builder.compile()
+
+# --- 5. Execution ---
+
+if __name__ == "__main__":
+    print("🚀 Starting HR Intelligence Graph...")
+    
+    # Invoke with initial state
+    result = app.invoke({"days_back": 30})
+    
+    print(f"\nSTATUS: {result['email_status']}")
+    print("\n--- FINAL REPORT DRAFT ---\n")
+    print(result['final_report'])
