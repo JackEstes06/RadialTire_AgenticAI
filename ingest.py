@@ -13,8 +13,17 @@ PDF_DIR = "files"
 CHROMA_PATH = "./chroma_tires"
 CHUNK_SIZE = 1000
 CHUNK_OVERLAP = 200
+EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 
 def main():
+    """
+    Ingestion Pipeline:
+    1. Loads PDFs from source directory.
+    2. Splits text into overlapping chunks to preserve context.
+    3. Converts text to Vector Embeddings.
+    4. Persists data to ChromaDB for retrieval.
+    """
+    
     # 1. Clean Legacy DB
     if os.path.exists(CHROMA_PATH):
         print(f"🧹 Clearing old database at {CHROMA_PATH}...")
@@ -43,7 +52,7 @@ def main():
     print(f"✅ Loaded {len(docs)} pages.")
 
     # 3. Split Text
-    print("✂️  Splitting documents...")
+    print(f"✂️  Splitting documents (Chunk: {CHUNK_SIZE}, Overlap: {CHUNK_OVERLAP})...")
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=CHUNK_SIZE, 
         chunk_overlap=CHUNK_OVERLAP,
@@ -52,12 +61,11 @@ def main():
     chunks = text_splitter.split_documents(docs)
     print(f"🧩 Created {len(chunks)} text chunks.")
 
-    # 4. Indexing
-    print("💾 Indexing to ChromaDB...")
+    # 4. Indexing (Vectorization)
+    print(f"💾 Vectorizing and Indexing to ChromaDB ({EMBEDDING_MODEL})...")
     
-    embedding_model = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+    embedding_model = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL)
     
-    # This .from_documents method is the modern replacement for the manual loop
     Chroma.from_documents(
         documents=chunks,
         embedding=embedding_model,
@@ -65,7 +73,7 @@ def main():
         collection_name="tire_docs"
     )
     
-    print("🚀 Success! Vector database is ready.")
+    print("🚀 Success! Vector database is ready for retrieval.")
 
 if __name__ == "__main__":
     main()

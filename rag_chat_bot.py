@@ -15,21 +15,25 @@ from langchain_core.runnables import RunnablePassthrough
 
 load_dotenv()
 
-# 1. Setup Components
+# --- 1. Setup Components ---
 embedding_model = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+
 vector_store = Chroma(
     collection_name="tire_docs",
     persist_directory="./chroma_tires",
     embedding_function=embedding_model
 )
+
+# k=4 means we retrieve the 4 most relevant chunks per query
 retriever = vector_store.as_retriever(search_kwargs={"k": 4})
 llm = ChatAnthropic(model="claude-3-haiku-20240307", temperature=0)
 
-# 2. Define Helper
+# --- 2. Define Helper Functions ---
 def format_docs(docs):
-    """Convert list of Documents to a single string for the Prompt"""
+    """Joins retrieved document chunks into a single context string."""
     return "\n\n".join(doc.page_content for doc in docs)
 
+# --- 3. Construct the RAG Chain ---
 prompt = ChatPromptTemplate.from_template("""
 You are a specialized Tire Warranty Assistant. Your job is to answer questions strictly based on the provided documentation.
 
@@ -51,14 +55,13 @@ Current Question:
 Answer:
 """)
 
-# 3. The "Chain" (Now returns a Dictionary, not just a string)
 rag_chain = (
-    # Step A: Retrieve docs and add them to the state as 'docs'
+    # Step A: Retrieve docs and store them in the dictionary under 'docs'
     RunnablePassthrough.assign(docs=itemgetter("question") | retriever)
-    # Step B: Calculate the answer (using the docs we just grabbed)
+    # Step B: Pass retrieved docs + history + question to the LLM
     .assign(answer=(
         {
-            "context_str": lambda x: format_docs(x["docs"]), # Turn docs into string for LLM
+            "context_str": lambda x: format_docs(x["docs"]),
             "question": itemgetter("question"),
             "chat_history": itemgetter("chat_history")
         }
@@ -68,24 +71,25 @@ rag_chain = (
     ))
 )
 
-# 4. UI Function with Metadata Logging
+# --- 4. UI Function with Analytics Logging ---
 def ask_claude(message, history):
+    # Format chat history for the LLM
     history_str = ""
     for turn in history:
         role = "User" if turn["role"] == "user" else "AI"
         content = turn["content"]
         history_str += f"{role}: {content}\n"
 
-    # Run Chain
+    # Invoke the RAG Chain
     result = rag_chain.invoke({
         "question": message, 
         "chat_history": history_str
     })
     
-    # Extract sources
+    # Extract source metadata (filenames) for transparency
     source_files = [doc.metadata.get("source", "Unknown File") for doc in result["docs"]]
 
-    # Logging
+    # Log the interaction (This data powers Iteration 3)
     log_entry = {
         "timestamp": time.time(),
         "question": message,
@@ -98,11 +102,11 @@ def ask_claude(message, history):
         
     return result["answer"]
 
-# 5. Launch
+# --- 5. Launch Application ---
 demo = gr.ChatInterface(
     fn=ask_claude,
-    title="Tire Bot",
-    description="I log exactly which files I read to answer you.",
+    title="Tire Warranty Assistant (RAG)",
+    description="I answer questions based strictly on uploaded PDF manuals. All queries are logged for analysis.",
     type="messages"
 )
 
