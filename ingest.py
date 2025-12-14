@@ -1,7 +1,7 @@
 import os
 import shutil
 
-from langchain_community.document_loaders import DirectoryLoader, PyPDFLoader
+from langchain_community.document_loaders import DirectoryLoader, PDFPlumberLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_chroma import Chroma
@@ -39,11 +39,13 @@ def main():
     loader = DirectoryLoader(
         PDF_DIR,
         glob="*.pdf",
-        loader_cls=PyPDFLoader,
+        loader_cls=PDFPlumberLoader,
         show_progress=True,
         use_multithreading=True
     )
+
     docs = loader.load()
+
     
     if not docs:
         print("❌ No documents found.")
