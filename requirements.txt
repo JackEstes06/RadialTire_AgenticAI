@@ -17,6 +17,7 @@ chromadb
 pypdf
 pdfplumber
 gradio
+pandas
 sentence-transformers
 
 
